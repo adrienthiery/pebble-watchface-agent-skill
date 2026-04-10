@@ -3,6 +3,7 @@
 // Missions: Launch Library 2 — cached in localStorage for 1 hour
 
 var CACHE_KEY = 'spc_v8'; // bumped: 14-char mission names
+var STATION_CACHE_KEY = 'spc_stations_v1';
 var CACHE_TTL = 3600000; // 1 hour in ms
 var N2YO_KEY_STORAGE = 'n2yo_key';
 var DEFAULT_N2YO_KEY = 'V5GWV8-RVBHRJ-PGWZDB-5PKU';
@@ -33,6 +34,28 @@ var xhrRequest = function(url, type, callback) {
     xhr.open(type, url);
     xhr.send();
 };
+
+// ---- Station cache (localStorage) ----
+
+function saveStationCache(issLon, cssLon) {
+    try {
+        localStorage.setItem(STATION_CACHE_KEY, JSON.stringify({
+            ts: Date.now(),
+            iss_lon: issLon,
+            css_lon: cssLon
+        }));
+    } catch(e) { console.log('Station cache save error: ' + e); }
+}
+
+function loadStationCache() {
+    try {
+        var raw = localStorage.getItem(STATION_CACHE_KEY);
+        if (!raw) return null;
+        var c = JSON.parse(raw);
+        if ((Date.now() - c.ts) < CACHE_TTL) return c;
+        return null;
+    } catch(e) { return null; }
+}
 
 // ---- Mission cache (localStorage) ----
 
@@ -138,14 +161,16 @@ function buildMissionMsg(msg, missions, issLon, cssLon) {
 // Send cached missions immediately so the watch isn't blank while stations load
 function sendCachedMissionsEarly() {
     var missions = s_missionsResult;
-    var msg = {
-        'USER_LON':    Math.round(s_userLon),
-        'ISS_VISIBLE': 0,
-        'ISS_LON':     0,
-        'CSS_VISIBLE': 0,
-        'CSS_LON':     0
-    };
-    buildMissionMsg(msg, missions, 0, 0);
+    var sc = loadStationCache();
+    var issLon = sc ? sc.iss_lon : 0;
+    var cssLon = sc ? sc.css_lon : 0;
+    var msg = { 'USER_LON': Math.round(s_userLon) };
+    if (sc) {
+        msg['ISS_LON'] = issLon;
+        msg['CSS_LON'] = cssLon;
+        console.log('Station cache hit: ISS=' + issLon + ' CSS=' + cssLon);
+    }
+    buildMissionMsg(msg, missions, issLon, cssLon);
     console.log('Sending cached missions early (' + missions.length + ')');
     Pebble.sendAppMessage(msg,
         function() { console.log('Early missions sent OK'); },
@@ -165,6 +190,8 @@ function sendDataWhenReady() {
         'CSS_LON':     s_cssResult.lon
     };
     buildMissionMsg(msg, s_missionsResult, s_issResult.lon, s_cssResult.lon);
+
+    saveStationCache(s_issResult.lon, s_cssResult.lon);
 
     console.log('Sending: ISS=' + s_issResult.visible + '@' + s_issResult.lon +
                 ' CSS=' + s_cssResult.visible + '@' + s_cssResult.lon +

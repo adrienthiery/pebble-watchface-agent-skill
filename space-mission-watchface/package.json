@@ -1,8 +1,10 @@
 {
   "name": "space-mission-watchface",
   "author": "Adrien THIERY",
-  "version": "1.0.0",
-  "keywords": ["pebble-app"],
+  "version": "1.0.1",
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
   "dependencies": {},
   "pebble": {
@@ -10,9 +12,20 @@
     "uuid": "e6ea08c7-3e52-43d7-b404-174eb90da649",
     "sdkVersion": "3",
     "enableMultiJS": true,
-    "targetPlatforms": ["aplite", "basalt", "chalk", "diorite", "emery"],
-    "watchapp": { "watchface": true },
-    "capabilities": ["location", "configurable"],
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "capabilities": [
+      "location",
+      "configurable"
+    ],
     "messageKeys": [
       "ISS_VISIBLE",
       "REQUEST_UPDATE",
@@ -61,6 +74,8 @@
       "MISSION_8_LON",
       "MISSION_9_LON"
     ],
-    "resources": { "media": [] }
+    "resources": {
+      "media": []
+    }
   }
 }

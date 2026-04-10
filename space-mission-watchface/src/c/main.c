@@ -22,7 +22,7 @@
 #define CREW_DRAGON_ORBIT_RADIUS  92
 #define SHENZHOU_ORBIT_RADIUS     86
 #define ARTEMIS_ORBIT_RADIUS      23
-#define MISSION_LABEL_Y 155
+#define MISSION_LABEL_Y 145
 #define HELIOCENTRIC_X   18
 #define HELIOCENTRIC_Y   43
 
@@ -41,7 +41,7 @@
 #define CREW_DRAGON_ORBIT_RADIUS 105
 #define SHENZHOU_ORBIT_RADIUS    100
 #define ARTEMIS_ORBIT_RADIUS      27
-#define MISSION_LABEL_Y 166
+#define MISSION_LABEL_Y 68
 #define HELIOCENTRIC_X   22
 #define HELIOCENTRIC_Y   46
 
@@ -157,25 +157,17 @@ static TextLayer *s_mission_layer = NULL;
 static AppTimer  *s_anim_timer   = NULL;
 
 static int       s_battery_level  = 100;
-static bool      s_iss_visible    = false;
 #ifdef DEBUG_STATIONS
 static int32_t   s_iss_angle      = ISS_DEBUG_ANGLE;
 static int32_t   s_css_angle      = CSS_DEBUG_ANGLE;
 #else
-static int32_t   s_iss_angle      = DEG_TO_TRIGANGLE(35);
-static int32_t   s_css_angle      = DEG_TO_TRIGANGLE(70);
+static int32_t   s_iss_angle      = DEG_TO_TRIGANGLE(180);
+static int32_t   s_css_angle      = DEG_TO_TRIGANGLE(180);
 #endif
-static bool      s_css_visible    = false;
 static int       s_anim_tick      = 0;
 static int       s_user_lon       = 5;   // default: Europe (Paris area)
 
-static MissionState s_missions[NUM_MISSIONS] = {
-    // Demo missions shown before JS data arrives — overwritten on first sync
-    { .name = "ORION",      .country = COUNTRY_US, .orbit = ORBIT_MOON,
-      .angle = DEG_TO_TRIGANGLE(120), .angle_speed = 480, .orbit_radius = ARTEMIS_ORBIT_RADIUS, .active = true },
-    { .name = "TESLA ROADSTER",.country = COUNTRY_US, .orbit = ORBIT_HELIOCENTRIC,
-      .angle = 0,                     .angle_speed = 0,   .orbit_radius = 0,                    .active = true },
-};
+static MissionState s_missions[NUM_MISSIONS];
 
 // ============================================================================
 // GPATHS — pre-allocated
@@ -413,9 +405,6 @@ static void draw_moon(GContext *ctx) {
 }
 
 static void draw_iss(GContext *ctx, GPoint pos, int32_t angle, int bar_half) {
-#ifndef DEBUG_STATIONS
-    if (!s_iss_visible) return;
-#endif
     if (!is_on_screen(pos, 12)) return;
 
     // Docking axis: white line tangent to orbit — widens with number of docked ships
@@ -455,9 +444,6 @@ static void draw_iss(GContext *ctx, GPoint pos, int32_t angle, int bar_half) {
 
 // Chinese Space Station — white body bar + flagpole + red flag (mirrors ISS style)
 static void draw_css(GContext *ctx, GPoint pos, int32_t angle, int bar_half) {
-#ifndef DEBUG_STATIONS
-    if (!s_css_visible) return;
-#endif
     if (!is_on_screen(pos, 12)) return;
 
     // Body: white line tangent to orbit — widens with number of docked ships
@@ -806,7 +792,7 @@ static void update_mission_from_message(int idx, Country country, OrbitType orbi
         if (s_missions[idx].orbit_radius == 0)
             s_missions[idx].orbit_radius = CREW_DRAGON_ORBIT_RADIUS;
         if (s_missions[idx].angle_speed == 0)
-            s_missions[idx].angle_speed = 450 + (idx * 31);
+            s_missions[idx].angle_speed = 300 + (idx * 20);
     }
     if (name && name[0] != '\0') {
         strncpy(s_missions[idx].name, name, sizeof(s_missions[idx].name) - 1);
@@ -826,24 +812,18 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     }
 
     // ISS
-    Tuple *iss_vis = dict_find(iterator, MESSAGE_KEY_ISS_VISIBLE);
-    if (iss_vis) s_iss_visible = (iss_vis->value->int32 == 1);
-
     Tuple *iss_lon = dict_find(iterator, MESSAGE_KEY_ISS_LON);
     if (iss_lon) {
-        APP_LOG(APP_LOG_LEVEL_INFO, "ISS lon=%d vis=%d", (int)iss_lon->value->int32, (int)s_iss_visible);
+        APP_LOG(APP_LOG_LEVEL_INFO, "ISS lon=%d", (int)iss_lon->value->int32);
 #ifndef DEBUG_STATIONS
         s_iss_angle = lon_to_orbit_angle((int)iss_lon->value->int32, s_user_lon);
 #endif
     }
 
     // CSS (Chinese Space Station)
-    Tuple *css_vis = dict_find(iterator, MESSAGE_KEY_CSS_VISIBLE);
-    if (css_vis) s_css_visible = (css_vis->value->int32 == 1);
-
     Tuple *css_lon = dict_find(iterator, MESSAGE_KEY_CSS_LON);
     if (css_lon) {
-        APP_LOG(APP_LOG_LEVEL_INFO, "CSS lon=%d vis=%d", (int)css_lon->value->int32, (int)s_css_visible);
+        APP_LOG(APP_LOG_LEVEL_INFO, "CSS lon=%d", (int)css_lon->value->int32);
 #ifndef DEBUG_STATIONS
         s_css_angle = lon_to_orbit_angle((int)css_lon->value->int32, s_user_lon);
 #endif
