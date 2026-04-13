@@ -206,6 +206,22 @@ function sendDataWhenReady() {
 
 // ---- Fetch: stations (always fresh) ----
 
+// Returns true if a satellite at (satLat, satLon) degrees and altKm altitude
+// is geometrically above the horizon as seen from (userLat, userLon).
+// Uses great-circle angular separation vs. the Earth-limb angle for that altitude.
+function isAboveHorizon(userLat, userLon, satLat, satLon, altKm) {
+    var R = 6371;
+    // Satellite is above horizon when great-circle angle < arccos(R / (R+h)),
+    // equivalent to cos(angle) > R / (R+h).
+    var maxCos = R / (R + altKm);
+    var lat1 = userLat * Math.PI / 180;
+    var lat2 = satLat  * Math.PI / 180;
+    var dLon  = (satLon - userLon) * Math.PI / 180;
+    var cosAngle = Math.sin(lat1) * Math.sin(lat2) +
+                   Math.cos(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    return cosAngle > maxCos;
+}
+
 function fetchStation(noradId, callback) {
     var url = 'https://api.wheretheiss.at/v1/satellites/' + noradId;
     xhrRequest(url, 'GET', function(responseText) {
@@ -213,15 +229,19 @@ function fetchStation(noradId, callback) {
             try {
                 var j = JSON.parse(responseText);
                 var lon = parseFloat(j.longitude);
-                if (isNaN(lon)) {
-                    console.log('Station ' + noradId + ': longitude missing in response');
+                var lat = parseFloat(j.latitude);
+                var alt = parseFloat(j.altitude);
+                if (isNaN(lon) || isNaN(lat)) {
+                    console.log('Station ' + noradId + ': position missing in response');
                     callback({ visible: 0, lon: 0 });
                     return;
                 }
-                callback({
-                    visible: (j.visibility === 'visible') ? 1 : 0,
-                    lon: Math.round(lon)
-                });
+                if (isNaN(alt)) alt = 408; // typical ISS altitude fallback
+                var visible = isAboveHorizon(s_userLat, s_userLon, lat, lon, alt) ? 1 : 0;
+                console.log('Station ' + noradId + ': lat=' + lat.toFixed(1) +
+                            ' lon=' + Math.round(lon) + ' alt=' + Math.round(alt) +
+                            ' visible=' + visible);
+                callback({ visible: visible, lon: Math.round(lon) });
                 return;
             } catch(e) {
                 console.log('Station parse error (' + noradId + '): ' + e);
@@ -237,7 +257,6 @@ function fetchISS() {
     fetchStation(25544, function(result) {
         s_pendingRequests--;
         s_issResult = result;
-        console.log('ISS: lon=' + result.lon + ' visible=' + result.visible);
         sendDataWhenReady();
     });
 }
@@ -256,9 +275,11 @@ function fetchCSS() {
                 if (pos) {
                     var lon = parseFloat(pos.satlongitude);
                     if (!isNaN(lon)) {
-                        var visible = (pos.elevation > 0 && !pos.eclipsed) ? 1 : 0;
+                        var visible = (pos.elevation > 0) ? 1 : 0;
                         s_cssResult = { visible: visible, lon: Math.round(lon) };
-                        console.log('CSS: lon=' + s_cssResult.lon + ' visible=' + visible);
+                        console.log('CSS: lat=' + (pos.satlatitude || '?') +
+                                    ' lon=' + Math.round(lon) + ' elev=' + pos.elevation.toFixed(1) +
+                                    ' visible=' + visible);
                         sendDataWhenReady();
                         return;
                     }
