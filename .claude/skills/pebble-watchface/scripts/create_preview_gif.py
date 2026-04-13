@@ -32,6 +32,9 @@ except ImportError:
     sys.exit(1)
 
 
+SCREENSHOT_TIMEOUT = 20  # seconds per frame before giving up
+
+
 def capture_frames(emulator: str, project_dir: Path, num_frames: int, frame_delay_ms: int) -> list:
     """Capture multiple frames from an emulator"""
     frames = []
@@ -43,15 +46,19 @@ def capture_frames(emulator: str, project_dir: Path, num_frames: int, frame_dela
     for i in range(num_frames):
         frame_path = temp_dir / f"frame_{emulator}_{i:03d}.png"
 
-        # Capture screenshot
-        result = subprocess.run(
-            ["pebble", "screenshot", "--no-open", "--emulator", emulator, str(frame_path)],
-            capture_output=True,
-            text=True
-        )
+        try:
+            result = subprocess.run(
+                ["pebble", "screenshot", "--no-open", "--emulator", emulator, str(frame_path)],
+                capture_output=True,
+                text=True,
+                timeout=SCREENSHOT_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            print(f"\nWarning: Frame {i} timed out for {emulator}, skipping")
+            continue
 
         if result.returncode != 0:
-            print(f"Warning: Failed to capture frame {i} for {emulator}")
+            print(f"\nWarning: Failed to capture frame {i} for {emulator}")
             continue
 
         if frame_path.exists():
