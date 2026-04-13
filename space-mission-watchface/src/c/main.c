@@ -91,9 +91,10 @@
 #define DATE_LAYER_H    22
 #define MISSION_LABEL_H 16
 
-// Animation
-#define ANIMATION_INTERVAL          50
-#define ANIMATION_INTERVAL_LOW_BAT 100
+// Animation — 2 fps is plenty for slow-moving spacecraft; redraw cost is the
+// dominant battery drain on a watchface, so keep this as low as looks OK.
+#define ANIMATION_INTERVAL          500
+#define ANIMATION_INTERVAL_LOW_BAT 2000
 #define LOW_BATTERY_THRESHOLD       20
 
 #define NUM_MISSIONS 10
@@ -164,7 +165,6 @@ static int32_t   s_css_angle      = CSS_DEBUG_ANGLE;
 static int32_t   s_iss_angle      = DEG_TO_TRIGANGLE(180);
 static int32_t   s_css_angle      = DEG_TO_TRIGANGLE(180);
 #endif
-static int       s_anim_tick      = 0;
 static int       s_user_lon       = 5;   // default: Europe (Paris area)
 
 static MissionState s_missions[NUM_MISSIONS];
@@ -695,10 +695,10 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 
 static void animation_update(void) {
 #ifndef DEBUG_STATIONS
-    // Real-speed orbital drift: 1 unit per 2 ticks ≈ 109 min/orbit
-    s_anim_tick++;
-    if ((s_anim_tick & 1) == 0) s_iss_angle = (s_iss_angle + 1) & (TRIG_MAX_ANGLE - 1);
-    else                         s_css_angle = (s_css_angle + 1) & (TRIG_MAX_ANGLE - 1);
+    // Orbital drift between 30-min data refreshes. Target ≈ 10 trig-units/sec
+    // to approximate ISS speed (~92 min/orbit). At 500 ms/tick: 5 units/tick.
+    s_iss_angle = (s_iss_angle + 5) & (TRIG_MAX_ANGLE - 1);
+    s_css_angle = (s_css_angle + 5) & (TRIG_MAX_ANGLE - 1);
 #endif
 
     for (int i = 0; i < NUM_MISSIONS; i++) {
