@@ -29,12 +29,15 @@
 #define DEST_AI      2
 #define DEST_WEBHOOK 3
 #define DEST_LOCAL   4   // on-watch reminders list (no phone needed)
+#define DEST_NEXTCLOUD  5
+
 
 // Destination bitmask bits (must match pkjs DEST_MASK)
 #define DEST_BIT_TASKS   (1 << DEST_TASKS)
 #define DEST_BIT_NOTION  (1 << DEST_NOTION)
 #define DEST_BIT_AI      (1 << DEST_AI)
 #define DEST_BIT_WEBHOOK (1 << DEST_WEBHOOK)
+#define DEST_BIT_NEXTCLOUD (1 << DEST_NEXTCLOUD)
 
 // Color aliases — compile away on B&W platforms
 #ifdef PBL_COLOR
@@ -178,6 +181,7 @@ static void rem_detail_window_push(int display_idx);
 static const char *dest_short_name(int dest) {
     switch (dest) {
         case DEST_TASKS:   return "Tasks";
+        case DEST_NEXTCLOUD: return "Cloud";  // or "Cloud"
         case DEST_NOTION:  return "Notion";
         case DEST_AI:      return "AI";
         case DEST_WEBHOOK: return "Hook";
