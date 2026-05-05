@@ -2,7 +2,7 @@
 // Routes voice notes to Google Tasks / Notion / AI agent / Custom Webhook
 // Intent classification runs locally; no extra API call needed for routing.
 
-var KEY_CONFIG  = 'brain_dump_cfg_v2';
+var KEY_CONFIG  = 'brain_dump_cfg_v1';
 var KEY_HISTORY = 'brain_dump_hist_v1';
 
 var TASKS_CLIENT_ID = '122599459809-1egpb0mrc97lpeh6fshnfv1i1drnvnkd.apps.googleusercontent.com';
