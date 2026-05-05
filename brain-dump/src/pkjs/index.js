@@ -25,7 +25,11 @@ var s_clock_24h    = false;   // updated from watch on each note
 // ============================================================================
 
 function getConfig() {
-    try { var r = localStorage.getItem(KEY_CONFIG); return r ? JSON.parse(r) : {}; }
+    try { 
+      var r = localStorage.getItem(KEY_CONFIG);
+      console.log('getConfig: ' + r);
+
+      return r ? JSON.parse(r) : {}; }
     catch(e) { return {}; }
 }
 function saveConfig(cfg) {
@@ -58,6 +62,7 @@ function getEnabledDests(cfg) {
     if (cfg.notion_enabled)  d.push('notion');
     if (cfg.ai_enabled)      d.push('ai');
     if (cfg.webhook_enabled) d.push('webhook');
+    if (cfg.nextcloud_enabled) d.push('nextcloud');
     return d;
 }
 
@@ -390,7 +395,7 @@ function sendToWebhook(text, cfg, cb) {
 // ROUTER
 // ============================================================================
 
-var DEST_INDEX = { tasks: 0, notion: 1, ai: 2, webhook: 3, local: 4 };
+var DEST_INDEX = { tasks: 0, notion: 1, ai: 2, webhook: 3, local: 4, nextcloud: 5 };
 
 function routeAndSend(text, isFollowup) {
     var cfg     = getConfig();
@@ -425,7 +430,7 @@ function routeAndSend(text, isFollowup) {
     // Tell the watch which destination was chosen so it can show the right status
     sendToWatch({ ROUTING_DONE: di });
 
-    var DEST_LABEL = { tasks: 'Tasks', notion: 'Notion', ai: 'AI', webhook: 'Webhook', local: 'Local' };
+    var DEST_LABEL = { tasks: 'Tasks', notion: 'Notion', ai: 'AI', webhook: 'Webhook', local: 'Local', nextcloud: 'Nextcloud' };
 
     function onResult(ok, data) {
         if (!ok) {
@@ -449,6 +454,7 @@ function routeAndSend(text, isFollowup) {
         case 'ai':      sendToAI     (text, isFollowup, cfg, onResult); break;
         case 'webhook': sendToWebhook(text, cfg, onResult); break;
         case 'local':   onResult(true, 'local'); break;  // save on-watch, no network call
+        case 'nextcloud': sendToNextcloud(text, cfg, onResult); break;
         default:        sendToWatch({ CONFIRM: 2 });
     }
 }
@@ -458,6 +464,49 @@ function sendToWatch(msg) {
         function()  { console.log('→ watch: ' + JSON.stringify(msg)); },
         function(e) { console.log('✗ watch: ' + JSON.stringify(e));   }
     );
+}
+
+function sendToNextcloud(text, cfg, cb) {
+    var url      = cfg.nextcloud_url;
+    var username = cfg.nextcloud_user;
+    var password = cfg.nextcloud_pass;
+    var calendar = cfg.nextcloud_cal || 'personal';
+
+    if (!url || !username || !password) {
+        cb(false, 'Nextcloud not configured');
+        return;
+    }
+
+    var uid  = Date.now() + '-braindump@pebble';
+    var now  = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    var body =
+        'BEGIN:VCALENDAR\r\n' +
+        'VERSION:2.0\r\n' +
+        'PRODID:-//BrainDump//Pebble//EN\r\n' +
+        'BEGIN:VTODO\r\n' +
+        'UID:' + uid + '\r\n' +
+        'DTSTAMP:' + now + '\r\n' +
+        'SUMMARY:' + text.replace(/\n/g, '\\n') + '\r\n' +
+        'STATUS:NEEDS-ACTION\r\n' +
+        'END:VTODO\r\n' +
+        'END:VCALENDAR\r\n';
+
+    var caldavUrl = url.replace(/\/$/, '') +
+        '/remote.php/dav/calendars/' + encodeURIComponent(username) +
+        '/' + encodeURIComponent(calendar) + '/' +
+        uid + '.ics';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('PUT', caldavUrl);
+    xhr.setRequestHeader('Content-Type', 'text/calendar; charset=utf-8');
+    xhr.setRequestHeader('Authorization', 'Basic ' + btoa(username + ':' + password));
+    xhr.onload = function() {
+        cb(this.status >= 200 && this.status < 300, 'nextcloud');
+    };
+    xhr.onerror = function() {
+        cb(false, 'Network error');
+    };
+    xhr.send(body);
 }
 
 // ============================================================================
@@ -473,6 +522,7 @@ Pebble.addEventListener('ready', function() {
     if (enabled.indexOf('notion')  >= 0) mask |= 2;
     if (enabled.indexOf('ai')      >= 0) mask |= 4;
     if (enabled.indexOf('webhook') >= 0) mask |= 8;
+    if (enabled.indexOf('nextcloud') >= 0) mask |= 32;  // bit 5
     sendToWatch({ DEST_MASK: mask });
 });
 
@@ -561,6 +611,7 @@ Pebble.addEventListener('showConfiguration', function() {
     '<select id="default_dest">' +
     '<option value="local"   ' + sel(cfg.default_dest || 'local','local')   + '>Local Reminders (on-watch)</option>' +
     '<option value="tasks"   ' + sel(cfg.default_dest,'tasks')   + '>Google Tasks</option>' +
+    '<option value="nextcloud"   ' + sel(cfg.default_dest,'nextcloud')   + '>Nextcloud Tasks</option>' +
     '<option value="notion"  ' + sel(cfg.default_dest,'notion')  + '>Notion</option>' +
     '<option value="ai"      ' + sel(cfg.default_dest,'ai')      + '>AI Agent</option>' +
     '<option value="webhook" ' + sel(cfg.default_dest,'webhook') + '>Webhook</option>' +
@@ -597,6 +648,24 @@ Pebble.addEventListener('showConfiguration', function() {
     '<input type="hidden" id="tasks_refresh_token" value=\'' + esc(cfg.tasks_refresh_token) + '\'>' +
     '<input type="hidden" id="pkce_verifier" value=\'' + esc(pVer) + '\'>' +
     '<br>Task list:<select id="tasks_list_id"><option value="">Loading...</option></select>' +
+    '</div></div>' +
+        
+    // ---- Nextcloud ----
+    '<div class="section">' +
+    '<label class="toggle-label"><input type="checkbox" id="nextcloud_enabled" ' + chk(cfg.nextcloud_enabled) + '>' +
+    ' Nextcloud</label>' +
+    '<div class="fields">' +
+        '<p class="note" style="margin:8px 0 6px;line-height:1.6">' +
+'<b>How to connect:</b><br>' +
+'1. Enter your Nextcloud server URL (just the root, e.g. <code>https://cloud.example.com</code>).<br>' +
+'2. Enter your Nextcloud username.<br>' +
+'3. In Nextcloud, go to <b>Settings → Security → Devices &amp; Sessions</b> and create a new App Password. Paste it below.<br>' +
+'4. Enter your task list slug. In the Nextcloud Tasks app, this is shown in the list URL — usually <code>personal</code> by default.<br>' +
+'5. Enable the toggle above and tap Save.</p>' +
+    'Server URL:<input type="text" id="nextcloud_url" value=\'' + esc(cfg.nextcloud_url) + '\'>' +
+    'Username:<input type="text" id="nextcloud_user" value=\'' + esc(cfg.nextcloud_user) + '\'>' +
+    'App Password:<input type="password" id="nextcloud_pass" value=\'' + esc(cfg.nextcloud_pass) + '\'>' +
+    'Task List Slug:<input type="text" id="nextcloud_cal" value=\'' + esc(cfg.nextcloud_cal) + '\'>' +
     '</div></div>' +
 
     // ---- Notion ----
@@ -770,7 +839,12 @@ Pebble.addEventListener('showConfiguration', function() {
     'webhook_url:document.getElementById("webhook_url").value.trim(),' +
     'webhook_verb:document.getElementById("webhook_verb").value,' +
     'webhook_token:document.getElementById("webhook_token").value.trim(),' +
-    'webhook_keywords:document.getElementById("webhook_keywords").value.trim()' +
+    'webhook_keywords:document.getElementById("webhook_keywords").value.trim(),' +
+    'nextcloud_enabled:document.getElementById("nextcloud_enabled").checked,' +
+    'nextcloud_url:document.getElementById("nextcloud_url").value.trim(),' +
+    'nextcloud_user:document.getElementById("nextcloud_user").value.trim(),' +
+    'nextcloud_pass:document.getElementById("nextcloud_pass").value.trim(),' +
+    'nextcloud_cal:document.getElementById("nextcloud_cal").value.trim()' +
     '};' +
     'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(c));' +
     '}' +
@@ -784,7 +858,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
     try {
         var cfg = JSON.parse(decodeURIComponent(e.response));
         saveConfig(cfg);
-        console.log('Config saved, dest mask recalculated');
+      console.log('Config saved, dest mask recalculated: '+e.response);
         // Re-send DEST_MASK to watch
         var enabled = getEnabledDests(cfg);
         var mask = 0;
@@ -792,6 +866,8 @@ Pebble.addEventListener('webviewclosed', function(e) {
         if (enabled.indexOf('notion')  >= 0) mask |= 2;
         if (enabled.indexOf('ai')      >= 0) mask |= 4;
         if (enabled.indexOf('webhook') >= 0) mask |= 8;
+        if (enabled.indexOf('nextcloud') >= 0) mask |= 32;  // bit 5
+
         sendToWatch({ DEST_MASK: mask });
     } catch(e2) {
         console.log('Config parse error: ' + e2);
