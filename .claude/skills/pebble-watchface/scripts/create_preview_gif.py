@@ -90,13 +90,16 @@ def create_gif(frames: list, output_path: Path, frame_duration_ms: int = 200):
         print(f"No frames to create GIF: {output_path}")
         return False
 
-    # Save as animated GIF
-    frames[0].save(
+    # GIF requires palette (P) mode — quantize each frame explicitly to avoid
+    # Pillow segfault on macOS when auto-converting from RGB
+    palette_frames = [f.convert('RGB').quantize(colors=256, method=Image.Quantize.MEDIANCUT) for f in frames]
+
+    palette_frames[0].save(
         output_path,
         save_all=True,
-        append_images=frames[1:],
+        append_images=palette_frames[1:],
         duration=frame_duration_ms,
-        loop=0  # Loop forever
+        loop=0
     )
     print(f"Created: {output_path}")
     return True
@@ -106,7 +109,7 @@ def create_preview_gifs(project_dir: str = ".", num_frames: int = 10, frame_dela
     """Create animated GIF previews for all platforms"""
 
     project_path = Path(project_dir)
-    platforms = ["emery", "basalt", "aplite", "chalk"]
+    platforms = ["emery", "basalt", "chalk", "aplite", "diorite"]
 
     print(f"Creating preview GIFs with {num_frames} frames each...")
     print(f"Frame capture delay: {frame_delay_ms}ms")
@@ -115,12 +118,21 @@ def create_preview_gifs(project_dir: str = ".", num_frames: int = 10, frame_dela
     for platform in platforms:
         print(f"\n--- {platform.upper()} ---")
 
-        # Check if emulator is running by trying to capture
-        test_result = subprocess.run(
-            ["pebble", "screenshot", "--no-open", "--emulator", platform, "/dev/null"],
-            capture_output=True,
-            text=True
-        )
+        # Check if emulator is running with a quick test screenshot
+        test_path = project_path / f"_test_{platform}.png"
+        try:
+            test_result = subprocess.run(
+                ["pebble", "screenshot", "--no-open", "--emulator", platform, str(test_path)],
+                capture_output=True,
+                text=True,
+                timeout=SCREENSHOT_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            print(f"Skipping {platform} - emulator not responding (timeout)")
+            continue
+        finally:
+            if test_path.exists():
+                test_path.unlink()
 
         if test_result.returncode != 0:
             print(f"Skipping {platform} - emulator not running")
