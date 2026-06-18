@@ -31,6 +31,7 @@
 #define DEST_LOCAL   4   // on-watch reminders list (no phone needed)
 #define DEST_TODOIST    5
 #define DEST_NEXTCLOUD  6
+#define DEST_NEXTCLOUD_TASKS 7
 
 // Destination bitmask bits (must match pkjs DEST_MASK)
 #define DEST_BIT_TASKS     (1 << DEST_TASKS)
@@ -39,6 +40,7 @@
 #define DEST_BIT_WEBHOOK   (1 << DEST_WEBHOOK)
 #define DEST_BIT_TODOIST   (1 << DEST_TODOIST)
 #define DEST_BIT_NEXTCLOUD (1 << DEST_NEXTCLOUD)
+#define DEST_BIT_NEXTCLOUD_TASKS (1 << DEST_NEXTCLOUD_TASKS)
 
 // Color aliases — compile away on B&W platforms
 #ifdef PBL_COLOR
@@ -200,6 +202,7 @@ static const char *dest_short_name(int dest) {
         case DEST_LOCAL:   return "Local";
         case DEST_TODOIST:   return "Todoist";
         case DEST_NEXTCLOUD: return "Cloud";
+        case DEST_NEXTCLOUD_TASKS: return "NC Task";
         default:           return "?";
     }
 }

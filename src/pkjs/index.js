@@ -60,7 +60,21 @@ function getEnabledDests(cfg) {
     if (cfg.ai_enabled)      d.push('ai');
     if (cfg.webhook_enabled)   d.push('webhook');
     if (cfg.nextcloud_enabled) d.push('nextcloud');
+    if (cfg.nextcloud_tasks_enabled) d.push('nextcloud_tasks');
     return d;
+}
+
+// Bitmask of enabled destinations, sent to the watch (must match DEST_BIT_* in main.c).
+function computeDestMask(enabled) {
+    var mask = 0;
+    if (enabled.indexOf('tasks')          >= 0) mask |= 1;
+    if (enabled.indexOf('notion')         >= 0) mask |= 2;
+    if (enabled.indexOf('ai')             >= 0) mask |= 4;
+    if (enabled.indexOf('webhook')        >= 0) mask |= 8;
+    if (enabled.indexOf('todoist')        >= 0) mask |= 32;
+    if (enabled.indexOf('nextcloud')      >= 0) mask |= 64;
+    if (enabled.indexOf('nextcloud_tasks') >= 0) mask |= 128;
+    return mask;
 }
 
 var TASK_SIGNALS = [
@@ -176,6 +190,18 @@ function classifyIntent(text, enabled, cfg) {
         });
         getCustomKeywords(cfg, 'todoist').forEach(function(k) {
             if (t.indexOf(k) >= 0) scores['todoist'] += 2;
+        });
+    }
+
+    // Task signals — Nextcloud Tasks (CalDAV)
+    if (scores['nextcloud_tasks'] !== undefined) {
+        TASK_SIGNALS.forEach(function(p) { if (t.indexOf(p) >= 0) scores['nextcloud_tasks'] += 2; });
+        tw.forEach(function(w) { if (t.indexOf(w) >= 0) scores['nextcloud_tasks'] += 1; });
+        ['nextcloud task', 'nextcloud tasks', 'add to nextcloud tasks'].forEach(function(k) {
+            if (t.indexOf(k) >= 0) scores['nextcloud_tasks'] += 4;
+        });
+        getCustomKeywords(cfg, 'nextcloud_tasks').forEach(function(k) {
+            if (t.indexOf(k) >= 0) scores['nextcloud_tasks'] += 2;
         });
     }
 
@@ -793,6 +819,107 @@ function sendToNextcloud(text, cfg, cb) {
 }
 
 // ============================================================================
+// NEXTCLOUD TASKS  (CalDAV / VTODO)
+// ============================================================================
+
+// Pull the human-readable reason out of a Sabre/DAV XML error body, if present.
+// Sabre returns e.g. <s:exception>Sabre\CalDAV\Exception\InvalidComponentType</s:exception>
+//                    <s:message>iCalendar objects must at least have a component of type VTODO</s:message>
+function sabreError(body) {
+    if (!body) return '';
+    var m = body.match(/<s:message>([\s\S]*?)<\/s:message>/i) ||
+            body.match(/<s:exception>([\s\S]*?)<\/s:exception>/i);
+    return m ? m[1].replace(/^Sabre\\[\w\\]*\\/, '').trim() : '';
+}
+
+// Escape a string for an iCalendar TEXT value (RFC 5545 §3.3.11).
+function icalEscape(s) {
+    return String(s)
+        .replace(/\\/g, '\\\\')
+        .replace(/;/g, '\\;')
+        .replace(/,/g, '\\,')
+        .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+function sendToNextcloudTasks(text, cfg, cb) {
+    var instance = (cfg.nextcloud_tasks_url || '').replace(/\/$/, '');
+    var user     = cfg.nextcloud_tasks_user;
+    var pass     = cfg.nextcloud_tasks_pass;
+    var list     = (cfg.nextcloud_tasks_list || 'personal').replace(/^\/|\/$/g, '');
+    if (!instance || !user || !pass) { cb(false, 'Nextcloud Tasks not configured'); return; }
+
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+    // Strip date/time words from the summary when we successfully parse a due date
+    var dueDate = extractDueDate(text);
+    var summary = dueDate ? stripDateTimeFromText(text) : text;
+
+    // DUE: date-time (floating local) when a time is present, else date-only
+    var dueLine = '';
+    if (dueDate) {
+        var ymd = dueDate.substring(0, 10).replace(/-/g, '');   // YYYYMMDD
+        var dueTime = extractTime(text);
+        dueLine = dueTime
+            ? 'DUE:' + ymd + 'T' + pad(dueTime.h) + pad(dueTime.m) + '00'
+            : 'DUE;VALUE=DATE:' + ymd;
+    }
+
+    // VTODO PRIORITY is 1 (highest) .. 9 (lowest); map from guessPriority (1..4)
+    var gp = guessPriority(text);
+    var prio = gp === 4 ? 1 : gp === 3 ? 3 : gp === 2 ? 5 : 0;
+
+    var now = new Date();
+    var dtstamp = now.getUTCFullYear() + pad(now.getUTCMonth() + 1) + pad(now.getUTCDate()) +
+                  'T' + pad(now.getUTCHours()) + pad(now.getUTCMinutes()) + pad(now.getUTCSeconds()) + 'Z';
+    var slug = 'braindump-' + Date.now() + '-' + Math.floor(Math.random() * 1000000);
+    var uid  = slug + '@pebble';
+
+    var lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Brain Dump//Pebble//EN',
+        'BEGIN:VTODO',
+        'UID:' + uid,
+        'DTSTAMP:' + dtstamp,
+        'SUMMARY:' + icalEscape(summary),
+        'STATUS:NEEDS-ACTION'
+    ];
+    if (prio > 0) lines.push('PRIORITY:' + prio);
+    if (dueLine)  lines.push(dueLine);
+    lines.push('END:VTODO');
+    lines.push('END:VCALENDAR');
+    var ics = lines.join('\r\n') + '\r\n';
+
+    var url = instance + '/remote.php/dav/calendars/' +
+              encodeURIComponent(user) + '/' + encodeURIComponent(list) + '/' + slug + '.ics';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Authorization', 'Basic ' + btoa64(user + ':' + pass));
+    xhr.setRequestHeader('Content-Type', 'text/calendar; charset=utf-8');
+    xhr.onload = function() {
+        if (this.status >= 200 && this.status < 300) {
+            cb(true, 'nextcloud_tasks');
+        } else if (this.status === 401) {
+            cb(false, 'Invalid credentials');
+        } else if (this.status === 403) {
+            // Sabre/DAV rejected the VTODO. Most often the list does not accept
+            // tasks (InvalidComponentType: events-only calendar), the path
+            // principal differs from the auth user, or write access is missing.
+            console.log('Nextcloud Tasks 403 body: ' + this.responseText);
+            var why = sabreError(this.responseText);
+            cb(false, why ? '403: ' + why : 'Forbidden: list "' + list + '" rejects tasks?');
+        } else if (this.status === 404) {
+            cb(false, 'List not found: ' + list);
+        } else {
+            cb(false, 'Error ' + this.status);
+        }
+    };
+    xhr.onerror = function() { cb(false, 'Network error'); };
+    xhr.send(ics);
+}
+
+// ============================================================================
 // TEXT CLEANING
 // ============================================================================
 
@@ -928,7 +1055,7 @@ function stripDateTimeFromText(text) {
 // ROUTER
 // ============================================================================
 
-var DEST_INDEX = { tasks: 0, notion: 1, ai: 2, webhook: 3, local: 4, todoist: 5, nextcloud: 6 };
+var DEST_INDEX = { tasks: 0, notion: 1, ai: 2, webhook: 3, local: 4, todoist: 5, nextcloud: 6, nextcloud_tasks: 7 };
 
 function routeAndSend(text, isFollowup) {
     var cfg     = getConfig();
@@ -956,6 +1083,7 @@ function routeAndSend(text, isFollowup) {
     if (dest === 'ai' && !isFollowup && isTaskLike(text)) {
         if      (enabled.indexOf('tasks')   >= 0) dest = 'tasks';
         else if (enabled.indexOf('todoist') >= 0) dest = 'todoist';
+        else if (enabled.indexOf('nextcloud_tasks') >= 0) dest = 'nextcloud_tasks';
         else dest = 'local';
     }
 
@@ -969,7 +1097,7 @@ function routeAndSend(text, isFollowup) {
     // Original text is still used for routing, due-date extraction, and AI context.
     var sendText = cleanNoteText(text);
 
-    var DEST_LABEL = { tasks: 'Tasks', notion: 'Notion', ai: 'AI', webhook: 'Webhook', local: 'Local', todoist: 'Todoist', nextcloud: 'Nextcloud' };
+    var DEST_LABEL = { tasks: 'Tasks', notion: 'Notion', ai: 'AI', webhook: 'Webhook', local: 'Local', todoist: 'Todoist', nextcloud: 'Nextcloud', nextcloud_tasks: 'Nextcloud Tasks' };
 
     function onResult(ok, data) {
         if (!ok) {
@@ -994,6 +1122,7 @@ function routeAndSend(text, isFollowup) {
         case 'webhook':   sendToWebhook   (sendText, cfg, onResult); break;
         case 'todoist':   sendToTodoist   (sendText, cfg, onResult); break;
         case 'nextcloud': sendToNextcloud (sendText, cfg, onResult); break;
+        case 'nextcloud_tasks': sendToNextcloudTasks(sendText, cfg, onResult); break;
         case 'local':     onResult(true, 'local'); break;  // saved on-watch from s_note_buf
         default:          sendToWatch({ CONFIRM: 2 });
     }
@@ -1014,14 +1143,7 @@ Pebble.addEventListener('ready', function() {
     console.log('Brain Dump JS ready');
     var cfg     = getConfig();
     var enabled = getEnabledDests(cfg);
-    var mask = 0;
-    if (enabled.indexOf('tasks')     >= 0) mask |= 1;
-    if (enabled.indexOf('notion')    >= 0) mask |= 2;
-    if (enabled.indexOf('ai')        >= 0) mask |= 4;
-    if (enabled.indexOf('webhook')   >= 0) mask |= 8;
-    if (enabled.indexOf('todoist')   >= 0) mask |= 32;
-    if (enabled.indexOf('nextcloud') >= 0) mask |= 64;
-    sendToWatch({ DEST_MASK: mask });
+    sendToWatch({ DEST_MASK: computeDestMask(enabled) });
 
     // Proactively refresh Google access token so it's always fresh before use.
     // Access tokens expire after 1 hour; refreshing on every connect keeps them valid.
@@ -1142,6 +1264,7 @@ Pebble.addEventListener('showConfiguration', function() {
     '<option value="notion"  ' + sel(cfg.default_dest,'notion')  + '>Notion</option>' +
     '<option value="ai"      ' + sel(cfg.default_dest,'ai')      + '>AI Agent</option>' +
     '<option value="nextcloud" ' + sel(cfg.default_dest,'nextcloud') + '>Nextcloud Notes</option>' +
+    '<option value="nextcloud_tasks" ' + sel(cfg.default_dest,'nextcloud_tasks') + '>Nextcloud Tasks</option>' +
     '<option value="webhook"   ' + sel(cfg.default_dest,'webhook')   + '>Webhook</option>' +
     '</select></label>' +
     '</div>' +
@@ -1223,6 +1346,21 @@ Pebble.addEventListener('showConfiguration', function() {
     'Category (optional):<input type="text" id="nextcloud_category" value=\'' + esc(cfg.nextcloud_category) + '\' placeholder="Brain Dump">' +
     'Routing keywords (comma-separated, added to defaults):<input type="text" id="nextcloud_keywords"' +
     ' value=\'' + esc(cfg.nextcloud_keywords) + '\' placeholder="nextcloud, cloud note, ...">' +
+    '</div></div>' +
+
+    // ---- Nextcloud Tasks (CalDAV) ----
+    '<div class="section">' +
+    '<label class="toggle-label"><input type="checkbox" id="nextcloud_tasks_enabled" ' + chk(cfg.nextcloud_tasks_enabled) + '>' +
+    ' Nextcloud Tasks</label>' +
+    '<div class="fields">' +
+    'Instance URL:<input type="text" id="nextcloud_tasks_url" value=\'' + esc(cfg.nextcloud_tasks_url) + '\' placeholder="https://cloud.example.com">' +
+    'Username:<input type="text" id="nextcloud_tasks_user" value=\'' + esc(cfg.nextcloud_tasks_user) + '\'>' +
+    'App password:<input type="password" id="nextcloud_tasks_pass" value=\'' + esc(cfg.nextcloud_tasks_pass) + '\'>' +
+    '<p class="note">Generate an App Password in Nextcloud: Settings → Security → App passwords. May be the same instance as Nextcloud Notes.</p>' +
+    'Task list (CalDAV name):<input type="text" id="nextcloud_tasks_list" value=\'' + esc(cfg.nextcloud_tasks_list) + '\' placeholder="personal">' +
+    '<p class="note">The list\'s internal name, not its display title. Default list is usually "personal". Find it in the Tasks app URL: …/apps/tasks/#/calendars/<b>NAME</b></p>' +
+    'Routing keywords (comma-separated, added to defaults):<input type="text" id="nextcloud_tasks_keywords"' +
+    ' value=\'' + esc(cfg.nextcloud_tasks_keywords) + '\' placeholder="nextcloud task, todo cloud, ...">' +
     '</div></div>' +
 
     // ---- AI Agent ----
@@ -1438,6 +1576,12 @@ Pebble.addEventListener('showConfiguration', function() {
     'nextcloud_pass:document.getElementById("nextcloud_pass").value.trim(),' +
     'nextcloud_category:document.getElementById("nextcloud_category").value.trim(),' +
     'nextcloud_keywords:document.getElementById("nextcloud_keywords").value.trim(),' +
+    'nextcloud_tasks_enabled:document.getElementById("nextcloud_tasks_enabled").checked,' +
+    'nextcloud_tasks_url:document.getElementById("nextcloud_tasks_url").value.trim(),' +
+    'nextcloud_tasks_user:document.getElementById("nextcloud_tasks_user").value.trim(),' +
+    'nextcloud_tasks_pass:document.getElementById("nextcloud_tasks_pass").value.trim(),' +
+    'nextcloud_tasks_list:document.getElementById("nextcloud_tasks_list").value.trim(),' +
+    'nextcloud_tasks_keywords:document.getElementById("nextcloud_tasks_keywords").value.trim(),' +
     'ai_enabled:document.getElementById("ai_enabled").checked,' +
     'ai_preset:document.getElementById("ai_preset").value,' +
     'ai_url:document.getElementById("ai_url").value.trim(),' +
@@ -1466,12 +1610,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
         console.log('Config saved, dest mask recalculated');
         // Re-send DEST_MASK to watch
         var enabled = getEnabledDests(cfg);
-        var mask = 0;
-        if (enabled.indexOf('tasks')   >= 0) mask |= 1;
-        if (enabled.indexOf('notion')  >= 0) mask |= 2;
-        if (enabled.indexOf('ai')      >= 0) mask |= 4;
-        if (enabled.indexOf('webhook') >= 0) mask |= 8;
-        sendToWatch({ DEST_MASK: mask });
+        sendToWatch({ DEST_MASK: computeDestMask(enabled) });
     } catch(e2) {
         console.log('Config parse error: ' + e2);
     }
