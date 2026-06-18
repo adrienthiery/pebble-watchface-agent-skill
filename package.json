@@ -44,7 +44,8 @@
       "CLOCK_24H",
       "ROUTING_DONE",
       "ERROR_MSG",
-      "NOTE_IS_CLASSIFY_ONLY"
+      "NOTE_IS_CLASSIFY_ONLY",
+      "WEBHOOK_MSG"
     ],
     "resources": {
       "media": [

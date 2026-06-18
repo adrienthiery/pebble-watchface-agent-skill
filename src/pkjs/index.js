@@ -704,7 +704,15 @@ function sendToWebhook(text, cfg, cb) {
     }
     if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
     xhr.onload = function() {
-        cb(this.status >= 200 && this.status < 300, 'webhook');
+        var isOk = this.status >= 200 && this.status < 300;
+        // Surface the webhook's response body to the watch when present, so the
+        // endpoint can reply back (e.g. confirmation text). Falls back to 'webhook'.
+        var data = 'webhook';
+        if (isOk && this.responseText) {
+            var rt = this.responseText.trim();
+            if (rt.length > 0) data = rt;
+        }
+        cb(isOk, data);
     };
     xhr.onerror = function() { cb(false, 'Network error'); };
     if (verb !== 'GET') {
@@ -1110,6 +1118,9 @@ function routeAndSend(text, isFollowup) {
         addHistory(sendText, di);
         if (dest === 'ai') {
             sendToWatch({ AI_RESPONSE: data, AI_RESPONSE_DONE: 1, DEST_USED: di });
+        } else if (dest === 'webhook' && data !== 'webhook') {
+            console.log('Sending webhook response to watch: ' + data);
+            sendToWatch({ CONFIRM: 1, DEST_USED: di, WEBHOOK_MSG: data.substring(0, 100) });
         } else {
             sendToWatch({ CONFIRM: 1, DEST_USED: di });
         }

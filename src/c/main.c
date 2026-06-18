@@ -89,6 +89,7 @@ static Window *s_rem_detail_window;
 // --- Home window layers ---
 static Layer     *s_canvas_layer;
 static TextLayer *s_status_layer;
+static TextLayer *s_webhook_msg_layer;
 static TextLayer *s_hint_up_layer;
 static TextLayer *s_hint_select_layer;
 static TextLayer *s_hint_down_layer;
@@ -137,6 +138,7 @@ static DictationSession *s_dictation_session;
 static char s_note_buf[NOTE_BUF_SIZE];
 static char s_ai_response_buf[NOTE_BUF_SIZE];
 static char s_status_buf[STATUS_BUF_SIZE];
+static char s_webhook_msg_buf[200];
 static char s_conversation_buf[CONV_BUF_SIZE];
 static int  s_conv_loading_at = -1;   // offset of "..." in s_conversation_buf
 
@@ -492,6 +494,16 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
                 char msg[STATUS_BUF_SIZE];
                 snprintf(msg, sizeof(msg), "Sent → %s ✓", dest_short_name(dest));
                 set_status(msg);
+
+                // Optional webhook reply body, shown under the status line.
+                Tuple *webhook_msg_t = dict_find(iter, MESSAGE_KEY_WEBHOOK_MSG);
+                if (webhook_msg_t && webhook_msg_t->value->cstring[0]) {
+                    strncpy(s_webhook_msg_buf, webhook_msg_t->value->cstring, sizeof(s_webhook_msg_buf) - 1);
+                    s_webhook_msg_buf[sizeof(s_webhook_msg_buf) - 1] = '\0';
+                    if (s_webhook_msg_layer) {
+                        text_layer_set_text(s_webhook_msg_layer, s_webhook_msg_buf);
+                    }
+                }
             }
         } else {
             Tuple *err_t = dict_find(iter, MESSAGE_KEY_ERROR_MSG);
@@ -804,6 +816,9 @@ static void home_select_click(ClickRecognizerRef rec, void *ctx) {
         set_status("Connect phone first");
         return;
     }
+    // Clear any previous webhook reply before starting a new dictation.
+    s_webhook_msg_buf[0] = '\0';
+    if (s_webhook_msg_layer) text_layer_set_text(s_webhook_msg_layer, "");
     dictation_session_start(s_dictation_session);
 }
 
@@ -845,6 +860,16 @@ static void home_window_load(Window *window) {
     text_layer_set_overflow_mode(s_status_layer, GTextOverflowModeWordWrap);
     text_layer_set_text(s_status_layer, "Ready");
     layer_add_child(root, text_layer_get_layer(s_status_layer));
+
+    // Webhook reply line, shown just below the status line.
+    s_webhook_msg_layer = text_layer_create(GRect(4, status_y + 18, content_w - 8, 40));
+    text_layer_set_background_color(s_webhook_msg_layer, GColorClear);
+    text_layer_set_text_color(s_webhook_msg_layer, C_STATUS);
+    text_layer_set_font(s_webhook_msg_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+    text_layer_set_text_alignment(s_webhook_msg_layer, GTextAlignmentCenter);
+    text_layer_set_overflow_mode(s_webhook_msg_layer, GTextOverflowModeWordWrap);
+    text_layer_set_text(s_webhook_msg_layer, "");
+    layer_add_child(root, text_layer_get_layer(s_webhook_msg_layer));
 
     // Right-side action labels — proportional Y aligns with physical buttons on all models.
     // Round: labels positioned inside the crescent (big-circle inner edge + small margin).
@@ -899,6 +924,10 @@ static void home_window_load(Window *window) {
 static void home_window_unload(Window *window) {
     layer_destroy(s_canvas_layer);            s_canvas_layer      = NULL;
     text_layer_destroy(s_status_layer);       s_status_layer      = NULL;
+    if (s_webhook_msg_layer) {
+        text_layer_destroy(s_webhook_msg_layer);
+        s_webhook_msg_layer = NULL;
+    }
     text_layer_destroy(s_hint_up_layer);      s_hint_up_layer     = NULL;
     text_layer_destroy(s_hint_select_layer);  s_hint_select_layer = NULL;
     text_layer_destroy(s_hint_down_layer);    s_hint_down_layer   = NULL;
