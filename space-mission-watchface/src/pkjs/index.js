@@ -7,6 +7,56 @@ var STATION_CACHE_KEY = 'spc_stations_v1';
 var CACHE_TTL = 3600000; // 1 hour in ms
 var N2YO_KEY_STORAGE = 'n2yo_key';
 var DEFAULT_N2YO_KEY = 'V5GWV8-RVBHRJ-PGWZDB-5PKU';
+var SETTINGS_STORAGE = 'spc_settings_v1';
+
+// Display filters — all on by default. Persisted in localStorage and mirrored
+// to the watch (which also persists them itself).
+var DEFAULT_SETTINGS = {
+    show_iss: 1, show_css: 1, show_roadster: 1, show_missions: 1,
+    show_us: 1, show_cn: 1, show_eu: 1, show_ru: 1
+};
+
+function getSettings() {
+    try {
+        var raw = localStorage.getItem(SETTINGS_STORAGE);
+        if (!raw) return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+        var s = JSON.parse(raw);
+        var out = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+        for (var k in DEFAULT_SETTINGS) {
+            if (s[k] !== undefined) out[k] = s[k] ? 1 : 0;
+        }
+        return out;
+    } catch(e) { return JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); }
+}
+
+function saveSettings(s) {
+    try { localStorage.setItem(SETTINGS_STORAGE, JSON.stringify(s)); }
+    catch(e) { console.log('Settings save error: ' + e); }
+}
+
+// Add the display-filter keys to an outgoing message.
+function addSettingsMsg(msg) {
+    var s = getSettings();
+    msg['SHOW_ISS']      = s.show_iss;
+    msg['SHOW_CSS']      = s.show_css;
+    msg['SHOW_ROADSTER'] = s.show_roadster;
+    msg['SHOW_MISSIONS'] = s.show_missions;
+    msg['SHOW_US']       = s.show_us;
+    msg['SHOW_CN']       = s.show_cn;
+    msg['SHOW_EU']       = s.show_eu;
+    msg['SHOW_RU']       = s.show_ru;
+}
+
+// Push just the settings to the watch (used right after the config closes,
+// so changes apply immediately without waiting on a network fetch).
+function sendSettings() {
+    var msg = {};
+    addSettingsMsg(msg);
+    Pebble.sendAppMessage(msg,
+        function() { console.log('Settings sent OK'); },
+        function() { console.log('Failed to send settings'); }
+    );
+}
 
 var s_userLat = 0;
 var s_userLon = 0;
@@ -171,6 +221,7 @@ function sendCachedMissionsEarly() {
         console.log('Station cache hit: ISS=' + issLon + ' CSS=' + cssLon);
     }
     buildMissionMsg(msg, missions, issLon, cssLon);
+    addSettingsMsg(msg);
     console.log('Sending cached missions early (' + missions.length + ')');
     Pebble.sendAppMessage(msg,
         function() { console.log('Early missions sent OK'); },
@@ -190,6 +241,7 @@ function sendDataWhenReady() {
         'CSS_LON':     s_cssResult.lon
     };
     buildMissionMsg(msg, s_missionsResult, s_issResult.lon, s_cssResult.lon);
+    addSettingsMsg(msg);
 
     saveStationCache(s_issResult.lon, s_cssResult.lon);
 
@@ -420,22 +472,44 @@ Pebble.addEventListener('appmessage', function(e) {
 
 Pebble.addEventListener('showConfiguration', function() {
     var currentKey = getN2YOKey();
+    var s = getSettings();
+    function chk(v) { return v ? ' checked' : ''; }
     var html = '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">' +
         '<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;padding:20px;margin:0}' +
-        'h2{color:#e94560;margin-top:0}label{display:block;margin-bottom:6px;font-size:14px}' +
-        'input{width:100%;box-sizing:border-box;padding:10px;background:#16213e;color:#eee;' +
+        'h2{color:#e94560;margin-top:0}h3{color:#e94560;font-size:15px;margin:20px 0 8px}' +
+        'label{display:block;margin-bottom:6px;font-size:14px}' +
+        'input[type=text]{width:100%;box-sizing:border-box;padding:10px;background:#16213e;color:#eee;' +
         'border:1px solid #e94560;border-radius:4px;font-size:14px;margin-bottom:16px}' +
+        '.row{display:flex;align-items:center;padding:8px 0;font-size:15px}' +
+        '.row input{width:20px;height:20px;margin-right:12px}' +
         'button{width:100%;padding:12px;background:#e94560;color:#fff;border:none;' +
-        'border-radius:4px;font-size:16px;cursor:pointer}' +
-        'p{font-size:12px;color:#aaa;margin-top:12px}</style></head>' +
+        'border-radius:4px;font-size:16px;cursor:pointer;margin-top:20px}' +
+        'p{font-size:12px;color:#aaa;margin-top:12px}' +
+        'hr{border:none;border-top:1px solid #333;margin:20px 0}</style></head>' +
         '<body><h2>Space Mission Settings</h2>' +
+        '<h3>Show on watchface</h3>' +
+        '<label class="row"><input type="checkbox" id="show_iss"'      + chk(s.show_iss)      + '>ISS</label>' +
+        '<label class="row"><input type="checkbox" id="show_css"'      + chk(s.show_css)      + '>Tiangong (CSS)</label>' +
+        '<label class="row"><input type="checkbox" id="show_roadster"' + chk(s.show_roadster) + '>Tesla Roadster</label>' +
+        '<label class="row"><input type="checkbox" id="show_missions"' + chk(s.show_missions) + '>Live missions</label>' +
+        '<h3>Mission agencies</h3>' +
+        '<label class="row"><input type="checkbox" id="show_us"' + chk(s.show_us) + '>USA</label>' +
+        '<label class="row"><input type="checkbox" id="show_cn"' + chk(s.show_cn) + '>China</label>' +
+        '<label class="row"><input type="checkbox" id="show_eu"' + chk(s.show_eu) + '>Europe</label>' +
+        '<label class="row"><input type="checkbox" id="show_ru"' + chk(s.show_ru) + '>Russia</label>' +
+        '<p>Agency filters apply to live missions only.</p>' +
+        '<hr>' +
         '<label for="key">N2YO API Key (for CSS real-time position)</label>' +
         '<input type="text" id="key" placeholder="' + DEFAULT_N2YO_KEY + '" value="' + currentKey + '">' +
-        '<button onclick="save()">Save</button>' +
         '<p>Get a free key at <strong>n2yo.com</strong>. The default key is shared and may be rate-limited.</p>' +
-        '<script>function save(){var k=document.getElementById("key").value.trim();' +
-        'var r=k.length>0?k:"";' +
-        'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify({n2yo_key:r}));' +
+        '<button onclick="save()">Save</button>' +
+        '<script>function cb(id){return document.getElementById(id).checked?1:0;}' +
+        'function save(){var k=document.getElementById("key").value.trim();' +
+        'var cfg={n2yo_key:k.length>0?k:"",' +
+        'show_iss:cb("show_iss"),show_css:cb("show_css"),show_roadster:cb("show_roadster"),' +
+        'show_missions:cb("show_missions"),show_us:cb("show_us"),show_cn:cb("show_cn"),' +
+        'show_eu:cb("show_eu"),show_ru:cb("show_ru")};' +
+        'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(cfg));' +
         '}<\/script></body></html>';
     Pebble.openURL('data:text/html,' + encodeURIComponent(html));
 });
@@ -453,6 +527,17 @@ Pebble.addEventListener('webviewclosed', function(e) {
                 console.log('N2YO key reset to default');
             }
         }
+
+        // Persist display filters and push them to the watch right away
+        var s = getSettings();
+        var keys = ['show_iss','show_css','show_roadster','show_missions',
+                    'show_us','show_cn','show_eu','show_ru'];
+        for (var i = 0; i < keys.length; i++) {
+            if (config[keys[i]] !== undefined) s[keys[i]] = config[keys[i]] ? 1 : 0;
+        }
+        saveSettings(s);
+        sendSettings();
+
         getLocationAndFetch();
     } catch(e2) {
         console.log('Config parse error: ' + e2);

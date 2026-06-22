@@ -146,6 +146,20 @@ typedef struct {
     bool        active;
 } MissionState;
 
+// User display preferences, set from the config screen and persisted.
+typedef struct {
+    bool show_iss;        // ISS station
+    bool show_css;        // Tiangong (Chinese Space Station)
+    bool show_roadster;   // Tesla Roadster (static heliocentric marker)
+    bool show_missions;   // live LL2 mission rockets
+    bool show_us;         // agency filter — USA / generic
+    bool show_cn;         // agency filter — China
+    bool show_eu;         // agency filter — Europe
+    bool show_ru;         // agency filter — Russia
+} Settings;
+
+#define PERSIST_KEY_SETTINGS 1
+
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
@@ -168,6 +182,37 @@ static int32_t   s_css_angle      = DEG_TO_TRIGANGLE(180);
 static int       s_user_lon       = 5;   // default: Europe (Paris area)
 
 static MissionState s_missions[NUM_MISSIONS];
+
+// All filters default ON — watchface shows everything until user opts out.
+static Settings  s_settings = {
+    .show_iss = true, .show_css = true, .show_roadster = true, .show_missions = true,
+    .show_us = true, .show_cn = true, .show_eu = true, .show_ru = true,
+};
+
+// True if missions from the given country should be drawn.
+static bool agency_visible(Country c) {
+    switch (c) {
+        case COUNTRY_CN: return s_settings.show_cn;
+        case COUNTRY_EU: return s_settings.show_eu;
+        case COUNTRY_RU: return s_settings.show_ru;
+        default:         return s_settings.show_us;
+    }
+}
+
+// True if mission slot i should be drawn, given live-missions toggle,
+// agency filter, and the parent station's visibility for docked ships.
+static bool mission_visible(int i) {
+    const MissionState *m = &s_missions[i];
+    if (!m->active) return false;
+    // Heliocentric deep-space (e.g. Tesla Roadster) has its own dedicated
+    // toggle and ignores the live-missions and agency filters.
+    if (m->orbit == ORBIT_HELIOCENTRIC) return s_settings.show_roadster;
+    if (!s_settings.show_missions) return false;
+    if (!agency_visible(m->country)) return false;
+    if (m->orbit == ORBIT_DOCKED     && !s_settings.show_iss) return false;
+    if (m->orbit == ORBIT_DOCKED_CSS && !s_settings.show_css) return false;
+    return true;
+}
 
 // ============================================================================
 // GPATHS — pre-allocated
@@ -661,11 +706,15 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     int iss_bar = (iss_docked > 2) ? (iss_docked - 1) * 10 + 4 : 14;
     int css_bar = (css_docked > 2) ? (css_docked - 1) * 10 + 4 : 14;
 
-    GPoint iss_pos = compute_orbit_pos(ec, ISS_ORBIT_RADIUS, s_iss_angle);
-    draw_iss(ctx, iss_pos, s_iss_angle, iss_bar);
+    if (s_settings.show_iss) {
+        GPoint iss_pos = compute_orbit_pos(ec, ISS_ORBIT_RADIUS, s_iss_angle);
+        draw_iss(ctx, iss_pos, s_iss_angle, iss_bar);
+    }
 
-    GPoint css_pos = compute_orbit_pos(ec, CSS_ORBIT_RADIUS, s_css_angle);
-    draw_css(ctx, css_pos, s_css_angle, css_bar);
+    if (s_settings.show_css) {
+        GPoint css_pos = compute_orbit_pos(ec, CSS_ORBIT_RADIUS, s_css_angle);
+        draw_css(ctx, css_pos, s_css_angle, css_bar);
+    }
 
     // Compute tangential offsets — ISS and CSS groups independently centred
     int docked_offsets[NUM_MISSIONS];
@@ -674,16 +723,16 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
         OrbitType ot = (pass == 0) ? ORBIT_DOCKED : ORBIT_DOCKED_CSS;
         int total = 0, rank = 0;
         for (int i = 0; i < NUM_MISSIONS; i++)
-            if (s_missions[i].active && s_missions[i].orbit == ot) total++;
+            if (mission_visible(i) && s_missions[i].orbit == ot) total++;
         for (int i = 0; i < NUM_MISSIONS; i++) {
-            if (!s_missions[i].active || s_missions[i].orbit != ot) continue;
+            if (!mission_visible(i) || s_missions[i].orbit != ot) continue;
             docked_offsets[i] = rank * 20 - (total - 1) * 10;
             rank++;
         }
     }
 
     for (int i = 0; i < NUM_MISSIONS; i++) {
-        if (s_missions[i].active) {
+        if (mission_visible(i)) {
             draw_mission_rocket(ctx, &s_missions[i], i, docked_offsets[i]);
         }
     }
@@ -802,7 +851,40 @@ static void update_mission_from_message(int idx, Country country, OrbitType orbi
             idx, s_missions[idx].name, (int)country, (int)orbit);
 }
 
+static void load_settings(void) {
+    if (persist_exists(PERSIST_KEY_SETTINGS)) {
+        persist_read_data(PERSIST_KEY_SETTINGS, &s_settings, sizeof(s_settings));
+    }
+}
+
+static void save_settings(void) {
+    persist_write_data(PERSIST_KEY_SETTINGS, &s_settings, sizeof(s_settings));
+}
+
+// Read a single boolean setting tuple if present; returns true if any changed.
+static bool read_bool_setting(DictionaryIterator *it, uint32_t key, bool *dst) {
+    Tuple *t = dict_find(it, key);
+    if (!t) return false;
+    *dst = (t->value->int32 != 0);
+    return true;
+}
+
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
+    // Display settings from config screen — persist if any present
+    bool changed = false;
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_ISS,      &s_settings.show_iss);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_CSS,      &s_settings.show_css);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_ROADSTER, &s_settings.show_roadster);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_MISSIONS, &s_settings.show_missions);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_US,       &s_settings.show_us);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_CN,       &s_settings.show_cn);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_EU,       &s_settings.show_eu);
+    changed |= read_bool_setting(iterator, MESSAGE_KEY_SHOW_RU,       &s_settings.show_ru);
+    if (changed) {
+        save_settings();
+        if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+    }
+
     // User location — process first so lon_to_orbit_angle is correct below
     Tuple *lon_tuple = dict_find(iterator, MESSAGE_KEY_USER_LON);
     if (lon_tuple) {
@@ -971,6 +1053,8 @@ static void main_window_unload(Window *window) {
 // ============================================================================
 
 static void init(void) {
+    load_settings();
+
     app_message_register_inbox_received(inbox_received_callback);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(512, 64);
